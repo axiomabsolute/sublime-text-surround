@@ -1,185 +1,157 @@
 import sublime, sublime_plugin
 
-MATCHING_CHARS = {
-  '{' : ['{', '}'],
-  '}' : ['{', '}'],
-  '[' : ['[', ']'],
-  ']' : ['[', ']'],
-  '(' : ['(', ')'],
-  ')' : ['(', ')'],
-  '<' : ['<', '>'],
-  '>' : ['<', '>']
-}
+class BaseSurroundCommand(sublime_plugin.TextCommand):
+  """
+  class BaseSurroundCommand(sublime_plugin.TextCommand)
+  |
+  | An abstract class representing shared behavior for all
+  | Surround commands.
+  |
+  | Static values:
+  |
+  | MATCHING_CHARS
+  | 
+  | A dictionary mapping special case surround shortcuts into
+  | open, close pairs.  E.g. both open and close parentheses 
+  | map to the pair (, ) to make surrounding with parens easier
+  |
 
-class AddSurroundCommand(sublime_plugin.TextCommand):
+
+  """
+
+  # Provides a shortcut for specifying surrounding characters as
+  # open, close pairs of characters.  An additional special case
+  # is included for xml tag pairs, handled outside of this dict
+  MATCHING_CHARS = {
+    '{' : ['{', '}'],
+    '}' : ['{', '}'],
+    '[' : ['[', ']'],
+    ']' : ['[', ']'],
+    '(' : ['(', ')'],
+    ')' : ['(', ')'],
+    '<' : ['<', '>'],
+    '>' : ['<', '>'],
+    '/*' : ['/*', '*/'],
+    '#' : ['# ',''],
+    '//' : ['// ', '']
+  }
+
+  def get_matching_char_pair(self, text):
+    if text in self.MATCHING_CHARS:
+      return self.MATCHING_CHARS[text]
+    # If the text looks like <...> assume its an xml tag
+    # and generate the appropriate closing tag
+    if text.startswith('<') and text.endswith('>'):
+      if text.startswith('</'):
+        return [text[0] + text[2:], text]
+      return [text, text[0] + "/" + text[1:]]
+    return [text, text]
+
+  def get_word_to_surround(self, region):
+    if region.empty():
+      return self.view.word(region.a)
+    return region
+
+  def run(self, edit):
+    raise NotImplementedError('The class "BaseSurroundCommand" is an abstract class and should not be used.')
+
+  def apply_surround_chars(self, surround_chars):
+    raise NotImplementedError('The class "BaseSurroundCommand" is an abstract class and should not be used.')
+
+  def after_input(self, text):
+    raise NotImplementedError('The class "BaseSurroundCommand" is an abstract class and should not be used.')
+
+class AddSurroundCommand(BaseSurroundCommand):
   def run(self, edit):
     self.view.window().show_input_panel('Surround with [char]:', '', self.after_input, None, None)
   
   def after_input(self, text):
     if text:
-      surround_chars = self.get_matching_char_pair(text[0])
+      surround_chars = self.get_matching_char_pair(text)
       self.apply_surround_chars(surround_chars)
-    
-  def get_matching_char_pair(self, text):
-    if text in MATCHING_CHARS:
-      return MATCHING_CHARS[text]
-    return [text, text]
   
   def apply_surround_chars(self, surround_chars):
     selected_regions = self.view.sel()
     for region in selected_regions:
       word = self.get_word_to_surround(region)
       self.insert_around_word(word, surround_chars)
-  
-  def get_word_to_surround(self, region):
-    if region.empty():
-      return self.view.word(region.a)
-    return region
 
   def insert_around_word(self, word, surround_chars):
     edit_sequence = self.view.begin_edit()
     self.view.insert(edit_sequence, word.begin(), surround_chars[0])
-    self.view.insert(edit_sequence, word.end() + 1, surround_chars[1])
+    # After inserting the prefix, the end of the word is shifted by the length of the prefix
+    self.view.insert(edit_sequence, word.end() + len(surround_chars[0]), surround_chars[1])
     self.view.end_edit(edit_sequence)
 
-class DeleteSurroundCommand(sublime_plugin.TextCommand):
+class DeleteSurroundCommand(BaseSurroundCommand):
   def run(self, edit):
     self.view.window().show_input_panel('Delete surrounding [char]:', '', self.after_input, None, None)
   
   def after_input(self, text):
     if text:
-      surround_chars = self.get_matching_char_pair(text[0])
+      surround_chars = self.get_matching_char_pair(text)
       self.apply_surround_chars(surround_chars)
-  
-  def get_matching_char_pair(self, text):
-    if text in MATCHING_CHARS:
-      return MATCHING_CHARS[text]
-    return [text, text]
 
   def apply_surround_chars(self, surround_chars):
     selected_regions = self.view.sel()
     for region in selected_regions:
-      regions_to_delete = self.get_closest_surrounding_regions(surround_chars, region)
-      if regions_to_delete:
-        self.delete_surrounding_regions(regions_to_delete)
+      if (region.size() > 0):
+        self.delete_surrounding_regions(surround_chars, region)
+      else:
+        self.delete_surrounding_regions(surround_chars, self.get_word_to_surround(region))
 
-  def get_word_to_surround(self, region):
-    if region.empty():
-      return self.view.word(region.a)
-    return region
+  def delete_surrounding_regions(self, surround_chars, region):
+    region_text = self.view.substr(region)
+    prefix = sublime.Region(max(0,region.begin() - len(surround_chars[0])), region.begin())
+    suffix = sublime.Region(region.end(), min(self.view.size(),region.end() + len(surround_chars[1])))
+    print("Suffix: %s" % suffix)
+    if self.view.substr(prefix) == surround_chars[0] and self.view.substr(suffix) == surround_chars[1]:
+      edit_sequence = self.view.begin_edit()
+      self.view.replace(edit_sequence, prefix, '')
+      # After deleting the prefix, the beginning and end of the suffix are shifted by the lenght of the prefix
+      self.view.replace(edit_sequence, sublime.Region(suffix.begin() - len(surround_chars[0]), suffix.end() - len(surround_chars[0])), '')
+      self.view.end_edit(edit_sequence)
+
+class ReplaceSurroundCommand(BaseSurroundCommand):
+
+  replace_chars = None
+  with_chars = None
+
+  def run(self, edit):
+    self.view.window().show_input_panel('Replace: ', '', self.after_replace_input, None, None)
   
-  def get_closest_surrounding_regions(self, surround_chars, region):
-    line_region = self.get_line_region_of_region(region)
-    if not line_region:
-      return None
+  def after_replace_input(self, text):
+    self.replace_chars = self.get_matching_char_pair(text)
+    self.view.window().show_input_panel('With: ', '', self.after_with_input, None, None)
 
-    line = self.view.substr(line_region)
-    begin, end = self.get_region_in_relation_to_line(region, line_region)
-    if begin == 0 or end == len(line) - 1:
-      return None
+  def after_with_input(self, text):
+    self.with_chars = self.get_matching_char_pair(text)
+    self.apply_surround_chars()
 
-    start = self.find_surrounding_char_on_line_before(surround_chars[0], line, begin)
-    if start < 0:
-      return None
-
-    stop = self.find_surrounding_char_on_line_after(surround_chars[1], line, end)
-    if stop < 0:
-      return None
-    
-    start += line_region.begin()
-    stop += line_region.begin()
-    
-    return (sublime.Region(start, start + 1), sublime.Region(stop - 1, stop))
-  
-  def get_line_region_of_region(self, region):
-    line_regions = self.view.lines(region)
-    if not len(line_regions) == 1:
-      return None
-    return line_regions[0]
-
-  def get_region_in_relation_to_line(self, region, line_region):
-    return region.begin() - line_region.begin(), region.end() - line_region.begin()
-
-  def find_surrounding_char_on_line_before(self, surround_char, line, begin):
-    return line.rfind(surround_char, 0, begin)
-  
-  def find_surrounding_char_on_line_after(self, surround_char, line, end):
-    return line.find(surround_char, end)
-
-  def delete_surrounding_regions(self, regions):
+  def insert_around_word(self, word, surround_chars):
     edit_sequence = self.view.begin_edit()
-    self.view.erase(edit_sequence, regions[0])
-    self.view.erase(edit_sequence, regions[1])
+    self.view.insert(edit_sequence, word.begin(), surround_chars[0])
+    self.view.insert(edit_sequence, word.end() + len(surround_chars[0]), surround_chars[1])
     self.view.end_edit(edit_sequence)
 
-class ReplaceSurroundCommand(sublime_plugin.TextCommand):
-  def run(self, edit):
-    self.view.window().show_input_panel('Replace surrounding [char] with [char]:', '', self.after_input, None, None)
-  
-  def after_input(self, text):
-    if not text or len(text) < 2:
-      return
-    surround_chars = self.get_matching_char_pair(text[0])
-    replace_chars = self.get_matching_char_pair(text[1])
-    self.apply_surround_chars(surround_chars, replace_chars)
+  def replace_around_word(self, replace_chars, with_chars, region):
+    region_text = self.view.substr(region)
+    prefix = sublime.Region(max(0,region.begin() - len(replace_chars[0])), region.begin())
+    suffix = sublime.Region(region.end(), min(self.view.size(),region.end() + len(replace_chars[1])))
+    print("Suffix: %s" % suffix)
+    if self.view.substr(prefix) == replace_chars[0] and self.view.substr(suffix) == replace_chars[1]:
+      edit_sequence = self.view.begin_edit()
+      self.view.replace(edit_sequence, prefix, '')
+      self.view.replace(edit_sequence, sublime.Region(suffix.begin() - len(replace_chars[0]), suffix.end() - len(replace_chars[0])), '')
+      self.view.insert(edit_sequence, region.begin() - len(replace_chars[0]), with_chars[0])
+      self.view.insert(edit_sequence, region.end() - len(replace_chars[0]) + len(with_chars[0]), with_chars[1])
+      self.view.end_edit(edit_sequence)
 
-  def get_matching_char_pair(self, text):
-    if text in MATCHING_CHARS:
-      return MATCHING_CHARS[text]
-    return [text, text]
-  
-  def apply_surround_chars(self, surround_chars, replace_chars):
+  def apply_surround_chars(self):
     selected_regions = self.view.sel()
     for region in selected_regions:
-      regions_to_replace = self.get_closest_surrounding_regions(surround_chars, region)
-      if regions_to_replace:
-        self.replace_surrounding_regions(regions_to_replace, replace_chars)
-  
-  def get_word_to_surround(self, region):
-    if region.empty():
-      return self.view.word(region.a)
-    return region
-  
-  def get_closest_surrounding_regions(self, surround_chars, region):
-    line_region = self.get_line_region_of_region(region)
-    if not line_region:
-      return None
+      if (region.size() > 0):
+        self.replace_around_word(self.replace_chars, self.with_chars, region)
+      else:
+        self.replace_around_word(self.replace_chars, self.with_chars, self.get_word_to_surround(region))
 
-    line = self.view.substr(line_region)
-    begin, end = self.get_region_in_relation_to_line(region, line_region)
-    if begin == 0 or end == len(line) - 1:
-      return None
-
-    start = self.find_surrounding_char_on_line_before(surround_chars[0], line, begin)
-    if start < 0:
-      return None
-
-    stop = self.find_surrounding_char_on_line_after(surround_chars[1], line, end)
-    if stop < 0:
-      return None
-    
-    start += line_region.begin()
-    stop += line_region.begin()
-    
-    return (sublime.Region(start, start + 1), sublime.Region(stop, stop + 1))
-  
-  def get_line_region_of_region(self, region):
-    line_regions = self.view.lines(region)
-    if not len(line_regions) == 1:
-      return None
-    return line_regions[0]
-
-  def get_region_in_relation_to_line(self, region, line_region):
-    return region.begin() - line_region.begin(), region.end() - line_region.begin()
-
-  def find_surrounding_char_on_line_before(self, surround_char, line, begin):
-    return line.rfind(surround_char, 0, begin)
-  
-  def find_surrounding_char_on_line_after(self, surround_char, line, end):
-    return line.find(surround_char, end)
-
-  def replace_surrounding_regions(self, regions, replace_chars):
-    edit_sequence = self.view.begin_edit()
-    self.view.replace(edit_sequence, regions[0], replace_chars[0])
-    self.view.replace(edit_sequence, regions[1], replace_chars[1])
-    self.view.end_edit(edit_sequence)
