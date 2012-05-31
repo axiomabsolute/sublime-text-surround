@@ -3,6 +3,8 @@ Surround (Sublime Text Plugin)
 
 This plugin implements the basic functionality of [surround.vim](https://github.com/tpope/vim-surround) as a Sublime Text plugin.
 
+This plugin is based on the work of [mgnandt/sublime-text-surround](https://github.com/mgnandt/sublime-text-surround).
+
 Installation
 ------------
 
